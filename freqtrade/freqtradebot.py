@@ -1348,6 +1348,7 @@ class FreqtradeBot(LoggingMixin):
         """
         if not trade.is_open:
             raise DependencyException(f"Attempt to handle closed trade: {trade}")
+        self.strategy.load_params_for_pair(trade.pair)
 
         logger.debug("Handling %s ...", trade)
 

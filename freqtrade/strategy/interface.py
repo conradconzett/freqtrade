@@ -216,6 +216,10 @@ class IStrategy(ABC, HyperStrategyMixin):
 
         strategy_safe_wrapper(self.bot_start)()
 
+        # Clear the per-pair cache so any updated per-pair JSON files (e.g. after a new
+        # hyperopt run or a /reload_config call) are picked up on the next tick.
+        self.reload_per_pair_params()
+
         self.ft_load_hyper_params(self.config.get("runmode") == RunMode.HYPEROPT)
 
     def ft_bot_cleanup(self) -> None:

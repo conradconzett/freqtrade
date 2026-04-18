@@ -35,6 +35,9 @@ class HyperStrategyMixin:
         """
         self.config = config
         self._ft_hyper_params: AllSpaceParams = {}
+        # Maps pair → file mtime at last successful load. Used to skip redundant JSON reads
+        # in live trading (checked every tick) and to auto-reload when a file changes on disk.
+        self._ft_per_pair_params_cache: dict[str, float] = {}
 
         params = self.load_params_from_file()
         params = params.get("params", {})
@@ -168,6 +171,11 @@ class HyperStrategyMixin:
             logger.debug(f"No per-pair parameter file found for {pair} at {filename}")
             return
 
+        # Skip re-reading when the file has not changed since the last successful load.
+        file_mtime = filename.stat().st_mtime
+        if self._ft_per_pair_params_cache.get(pair) == file_mtime:
+            return
+
         logger.info(f"Loading per-pair parameters for {pair} from {filename}")
         try:
             data = HyperoptTools.load_params(filename)
@@ -197,6 +205,32 @@ class HyperStrategyMixin:
         if "stoploss" in params:
             self.stoploss = params["stoploss"].get("stoploss", self.stoploss)
             logger.debug(f"Per-pair stoploss for {pair}: {self.stoploss}")
+
+        # Mark this pair as successfully loaded with the current file mtime.
+        self._ft_per_pair_params_cache[pair] = file_mtime
+
+    def reload_per_pair_params(self, pair: str | None = None) -> None:
+        """
+        Clear the per-pair parameter cache so the next call to :meth:`load_params_for_pair`
+        re-reads from disk regardless of file mtime.
+
+        Use cases:
+        * Called automatically in :meth:`~freqtrade.strategy.interface.IStrategy.ft_bot_start`
+          so that a ``/reload_config`` API call always picks up fresh per-pair files.
+        * Call explicitly (e.g. from ``bot_start()`` in your strategy) after running a new
+          ``freqtrade hyperopt --store-hyperopt-per-pair`` to apply updated params immediately
+          without restarting the bot.
+
+        :param pair: Pair to invalidate (e.g. ``'BTC/USDT'``), or ``None`` to clear all pairs.
+        """
+        if pair is None:
+            self._ft_per_pair_params_cache.clear()
+            logger.info(
+                "Per-pair parameter cache cleared — all pairs will reload on next tick."
+            )
+        else:
+            self._ft_per_pair_params_cache.pop(pair, None)
+            logger.info(f"Per-pair parameter cache cleared for {pair}.")
 
     def _ft_load_params(
         self, params: SpaceParams, param_values: dict, space: str, hyperopt: bool = False
