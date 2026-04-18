@@ -144,9 +144,10 @@ class HyperStrategyMixin:
         filename = strategy_file.with_name(f"{strategy_file.stem}-{pair_suffix}.json")
 
         if not filename.is_file():
+            logger.debug(f"No per-pair parameter file found for {pair} at {filename}")
             return
 
-        logger.debug(f"Loading per-pair parameters for {pair} from {filename}")
+        logger.info(f"Loading per-pair parameters for {pair} from {filename}")
         try:
             data = HyperoptTools.load_params(filename)
         except ValueError:
