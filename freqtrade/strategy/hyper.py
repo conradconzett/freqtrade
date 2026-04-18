@@ -168,8 +168,9 @@ class HyperStrategyMixin:
 
         # Apply roi and stoploss via direct attribute assignment, mirroring
         # ft_load_params_from_file().  trailing and max_open_trades remain global.
+        # JSON keys are always strings; minimal_roi requires integer keys.
         if "roi" in params:
-            self.minimal_roi = params["roi"]
+            self.minimal_roi = {int(k): v for k, v in params["roi"].items()}
             logger.debug(f"Per-pair minimal_roi for {pair}: {self.minimal_roi}")
         if "stoploss" in params:
             self.stoploss = params["stoploss"].get("stoploss", self.stoploss)

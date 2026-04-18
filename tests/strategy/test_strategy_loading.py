@@ -457,7 +457,7 @@ def test_load_params_for_pair_applies_buy_sell_roi_stoploss(default_conf, mocker
 
     assert strategy.buy_rsi.value == 42
     assert strategy.sell_rsi.value == 88
-    assert strategy.minimal_roi == {"0": 0.20, "30": 0.10}
+    assert strategy.minimal_roi == {0: 0.20, 30: 0.10}
     assert strategy.stoploss == pytest.approx(-0.08)
 
 
