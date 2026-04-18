@@ -102,7 +102,10 @@ class HyperStrategyMixin:
         filename_str = getattr(self, "__file__", "")
         if not filename_str:
             return {}
-        filename = Path(filename_str).with_suffix(".json")
+
+        strategy_file = Path(filename_str)
+        filename = strategy_file.with_suffix(".json")
+        result: dict = {}
 
         if filename.is_file():
             logger.info(f"Loading parameters from file {filename}")
@@ -110,13 +113,31 @@ class HyperStrategyMixin:
                 params = HyperoptTools.load_params(filename)
                 if params.get("strategy_name") != self.__class__.__name__:
                     raise OperationalException("Invalid parameter file provided.")
-                return params
+                result = params
             except ValueError:
                 logger.warning("Invalid parameter file format.")
-                return {}
-        logger.info("Found no parameter file.")
+        else:
+            logger.info("Found no parameter file.")
 
-        return {}
+        # Scan for per-pair parameter files and report them at startup so the user
+        # knows which pairs have dedicated hyperopt parameters that will be applied
+        # automatically during backtesting and live trading.
+        per_pair_files = sorted(
+            strategy_file.parent.glob(f"{strategy_file.stem}-*.json")
+        )
+        if per_pair_files:
+            logger.info(
+                f"Found {len(per_pair_files)} per-pair parameter file(s) — "
+                "will be applied automatically per pair during backtesting/trading: "
+                + ", ".join(p.name for p in per_pair_files)
+            )
+        else:
+            logger.info(
+                "No per-pair parameter files found. "
+                "Run hyperopt with --store-hyperopt-per-pair to create them."
+            )
+
+        return result
 
     def load_params_for_pair(self, pair: str) -> None:
         """
