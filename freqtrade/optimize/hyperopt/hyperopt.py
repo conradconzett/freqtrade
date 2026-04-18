@@ -298,6 +298,7 @@ class Hyperopt:
         self.current_best_epoch = None
         self.num_epochs_saved = 0
         self.count_skipped_epochs = 0
+        self.hyperopt_table_header = -1
 
         # Restrict backtesting data to this pair only.
         self.config["pairs"] = [pair]
