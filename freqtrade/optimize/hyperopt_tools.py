@@ -61,10 +61,18 @@ class HyperoptTools:
         return None
 
     @staticmethod
-    def export_params(params, strategy_name: str, filename: Path):
+    def export_params(params, strategy_name: str, filename: Path, pair: str | None = None):
         """
         Generate files
+        :param params: epoch result dict
+        :param strategy_name: name of the strategy
+        :param filename: target .json path (strategy file with .json suffix)
+        :param pair: when set, suffix the filename with the sanitised pair name,
+                     e.g. ``MyStrategy-BTC_USDT.json``
         """
+        if pair is not None:
+            pair_suffix = pair.replace("/", "_").replace(":", "_")
+            filename = filename.with_stem(f"{filename.stem}-{pair_suffix}")
         final_params = deepcopy(params["params_not_optimized"])
         final_params = deep_merge_dicts(params["params_details"], final_params)
         final_params = {
@@ -93,12 +101,16 @@ class HyperoptTools:
         return params
 
     @staticmethod
-    def try_export_params(config: Config, strategy_name: str, params: dict):
+    def try_export_params(
+        config: Config, strategy_name: str, params: dict, pair: str | None = None
+    ):
         if params.get(FTHYPT_FILEVERSION, 1) >= 2 and not config.get("disableparamexport", False):
             # Export parameters ...
             fn = HyperoptTools.get_strategy_filename(config, strategy_name)
             if fn:
-                HyperoptTools.export_params(params, strategy_name, fn.with_suffix(".json"))
+                HyperoptTools.export_params(
+                    params, strategy_name, fn.with_suffix(".json"), pair=pair
+                )
             else:
                 logger.warning("Strategy not found, not exporting parameter file.")
 

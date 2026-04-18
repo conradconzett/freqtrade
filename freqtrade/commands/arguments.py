@@ -79,6 +79,7 @@ ARGS_HYPEROPT = [
     "hyperopt_min_trades",
     "hyperopt_loss",
     "disableparamexport",
+    "hyperopt_per_pair",
     "hyperopt_ignore_missing_space",
     "analyze_per_epoch",
     "early_stop",

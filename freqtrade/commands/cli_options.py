@@ -256,6 +256,13 @@ AVAILABLE_CLI_OPTIONS = {
         help="Disable automatic hyperopt parameter export.",
         action="store_true",
     ),
+    "hyperopt_per_pair": Arg(
+        "--store-hyperopt-per-pair",
+        help="Run hyperopt independently for each pair and store results in separate "
+        "per-pair parameter files (e.g. MyStrategy-BTC_USDT.json).",
+        action="store_true",
+        default=False,
+    ),
     "fee": Arg(
         "--fee",
         help="Specify fee ratio. Will be applied twice (on trade entry and exit).",

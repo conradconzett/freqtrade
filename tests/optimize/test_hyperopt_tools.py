@@ -408,7 +408,57 @@ def test_try_export_params(default_conf, tmp_path, caplog, mocker):
     assert export_mock.call_args_list[0][0][2].name == "strategy_test_v3.json"
 
 
-def test_params_print(capsys):
+def test_export_params_per_pair(tmp_path):
+    """export_params with pair= appends the sanitised pair name to the filename."""
+    filename = tmp_path / f"{CURRENT_TEST_STRATEGY}.json"
+    params = {
+        "params_details": {
+            "buy": {"buy_rsi": 28},
+            "sell": {"sell_rsi": 65},
+            "roi": {"0": 0.10},
+            "stoploss": {"stoploss": -0.06},
+        },
+        "params_not_optimized": {},
+    }
+    HyperoptTools.export_params(params, CURRENT_TEST_STRATEGY, filename, pair="BTC/USDT")
+
+    expected = tmp_path / f"{CURRENT_TEST_STRATEGY}-BTC_USDT.json"
+    assert expected.is_file()
+    # The original filename must NOT have been written.
+    assert not filename.is_file()
+
+    with expected.open("r") as f:
+        content = rapidjson.load(f)
+    assert content["strategy_name"] == CURRENT_TEST_STRATEGY
+    assert content["params"]["buy"]["buy_rsi"] == 28
+
+
+def test_export_params_per_pair_futures(tmp_path):
+    """Futures pair names contain ':' which must also be sanitised in the filename."""
+    filename = tmp_path / f"{CURRENT_TEST_STRATEGY}.json"
+    params = {"params_details": {"buy": {"buy_rsi": 25}}, "params_not_optimized": {}}
+    HyperoptTools.export_params(params, CURRENT_TEST_STRATEGY, filename, pair="ADA/USDT:USDT")
+
+    expected = tmp_path / f"{CURRENT_TEST_STRATEGY}-ADA_USDT_USDT.json"
+    assert expected.is_file()
+
+
+def test_try_export_params_per_pair(default_conf, tmp_path, mocker):
+    """try_export_params passes the pair kwarg through to export_params."""
+    default_conf["disableparamexport"] = False
+    default_conf["user_data_dir"] = tmp_path
+    export_mock = mocker.patch("freqtrade.optimize.hyperopt_tools.HyperoptTools.export_params")
+
+    params = {
+        "params_details": {"buy": {"buy_rsi": 30}},
+        "params_not_optimized": {},
+        FTHYPT_FILEVERSION: 2,
+    }
+    HyperoptTools.try_export_params(default_conf, CURRENT_TEST_STRATEGY, params, pair="BTC/USDT")
+
+    assert export_mock.call_count == 1
+    call_kwargs = export_mock.call_args[1]
+    assert call_kwargs.get("pair") == "BTC/USDT"
     params = {
         "buy": {"buy_rsi": 30},
         "sell": {"sell_rsi": 70},

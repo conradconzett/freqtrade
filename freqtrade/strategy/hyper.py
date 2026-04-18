@@ -118,6 +118,63 @@ class HyperStrategyMixin:
 
         return {}
 
+    def load_params_for_pair(self, pair: str) -> None:
+        """
+        Load per-pair hyperopt parameters from ``{StrategyName}-{PAIR}.json`` (if present).
+
+        Applied spaces: ``buy``, ``sell``, ``protection`` (via :meth:`_ft_load_params`),
+        ``roi`` and ``stoploss`` (via direct attribute assignment).
+        ``trailing`` and ``max_open_trades`` are intentionally kept global.
+
+        This is a strict no-op when no per-pair file is found, leaving the globally loaded
+        parameters untouched (backward-compatible by design).
+
+        :param pair: Trading pair, e.g. ``'BTC/USDT'``.
+        """
+        if not self._ft_hyper_params:
+            # ft_bot_start() has not been called yet; parameters are not yet initialised.
+            return
+
+        filename_str = getattr(self, "__file__", "")
+        if not filename_str:
+            return
+
+        strategy_file = Path(filename_str)
+        pair_suffix = pair.replace("/", "_").replace(":", "_")
+        filename = strategy_file.with_name(f"{strategy_file.stem}-{pair_suffix}.json")
+
+        if not filename.is_file():
+            return
+
+        logger.debug(f"Loading per-pair parameters for {pair} from {filename}")
+        try:
+            data = HyperoptTools.load_params(filename)
+        except ValueError:
+            logger.warning(f"Invalid per-pair parameter file for {pair}: {filename}")
+            return
+
+        if data.get("strategy_name") != self.__class__.__name__:
+            logger.warning(
+                f"Per-pair parameter file {filename} strategy_name mismatch — skipping."
+            )
+            return
+
+        params = data.get("params", {})
+
+        # Apply buy / sell / protection BaseParameter objects.
+        for space in ("buy", "sell", "protection"):
+            if space in self._ft_hyper_params and space in params:
+                self._ft_load_params(self._ft_hyper_params[space], params[space], space)
+
+        # Apply roi and stoploss via direct attribute assignment, mirroring
+        # ft_load_params_from_file().  trailing and max_open_trades remain global.
+        if "roi" in params:
+            self.minimal_roi = params["roi"]
+            logger.debug(f"Per-pair minimal_roi for {pair}: {self.minimal_roi}")
+        if "stoploss" in params:
+            self.stoploss = params["stoploss"].get("stoploss", self.stoploss)
+            logger.debug(f"Per-pair stoploss for {pair}: {self.stoploss}")
+
     def _ft_load_params(
         self, params: SpaceParams, param_values: dict, space: str, hyperopt: bool = False
     ) -> None:

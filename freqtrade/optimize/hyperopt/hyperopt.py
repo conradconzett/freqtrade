@@ -216,18 +216,174 @@ class Hyperopt:
 
         self._save_result(val)
 
+    def _run_epoch_loop(
+        self,
+        parallel: Parallel,
+        jobs: int,
+        pbar: Any,
+        task: Any,
+    ) -> None:
+        """
+        Inner epoch execution loop shared by the standard and per-pair hyperopt paths.
+        Runs ``self.total_epochs`` epochs using the already-prepared ``self.hyperopter`` and
+        ``self.opt``.
+        """
+        start = 0
+
+        if self.analyze_per_epoch:
+            # First analysis not in parallel mode when using --analyze-per-epoch.
+            # This allows dataprovider to load its informative cache.
+            asked, is_random = self.get_asked_points(
+                n_points=1, dimensions=self.hyperopter.o_dimensions
+            )
+            f_val0 = self.hyperopter.generate_optimizer(asked[0].params)
+            self.opt.tell(asked[0], [f_val0["loss"]])
+            self.evaluate_result(f_val0, 1, is_random[0])
+            pbar.update(task, advance=1)
+            start += 1
+
+        evals = ceil((self.total_epochs - start) / jobs)
+        for i in range(evals):
+            # Correct the number of epochs to be processed for the last
+            # iteration (should not exceed self.total_epochs in total)
+            n_rest = (i + 1) * jobs - (self.total_epochs - start)
+            current_jobs = jobs - n_rest if n_rest > 0 else jobs
+
+            asked, is_random = self.get_asked_points(
+                n_points=current_jobs, dimensions=self.hyperopter.o_dimensions
+            )
+
+            f_val = self.run_optimizer_parallel(
+                parallel,
+                [asked1.params for asked1 in asked],
+            )
+
+            f_val_loss = [v["loss"] for v in f_val]
+            for o_ask, v in zip(asked, f_val_loss, strict=False):
+                self.opt.tell(o_ask, v)
+
+            for j, val in enumerate(f_val):
+                # Use human-friendly indexes here (starting from 1)
+                current = i * jobs + j + 1 + start
+
+                self.evaluate_result(val, current, is_random[j])
+                pbar.update(task, advance=1)
+            self.hyperopter.handle_mp_logging()
+            gc.collect()
+
+            if (
+                self.hyperopter.es_epochs > 0
+                and self.hyperopter.es_terminator.should_terminate(self.opt)
+            ):
+                logger.info(f"Early stopping after {(i + 1) * jobs} epochs")
+                break
+
+    def _run_hyperopt_for_pair(
+        self,
+        pair: str,
+        parallel: Parallel,
+        jobs: int,
+        pbar: Any,
+    ) -> None:
+        """
+        Run a full hyperopt epoch loop restricted to *pair*, then export the best result to
+        a per-pair parameter file (e.g. ``MyStrategy-BTC_USDT.json``).
+        """
+        pair_suffix = pair.replace("/", "_").replace(":", "_")
+        strategy = str(self.config["strategy"])
+        time_now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        # Reset per-pair counters so evaluate_result() numbering restarts from 1.
+        self.current_best_loss = 100
+        self.current_best_epoch = None
+        self.num_epochs_saved = 0
+        self.count_skipped_epochs = 0
+
+        # Restrict backtesting data to this pair only.
+        self.config["pairs"] = [pair]
+
+        # Use a dedicated results file for this pair.
+        self.results_file = (
+            self.config["user_data_dir"]
+            / "hyperopt_results"
+            / f"strategy_{strategy}_{time_now}_{pair_suffix}.fthypt"
+        )
+
+        # Rebuild hyperopter so it loads/pickles only this pair's data.
+        self.hyperopter = HyperOptimizer(self.config, self.data_pickle_file)
+        self.hyperopter.prepare_hyperopt()
+        self.opt = self.hyperopter.get_optimizer(self.random_state)
+
+        logger.info(f"Running hyperopt for pair: {pair}")
+        task = pbar.add_task(f"Epochs [{pair}]", total=self.total_epochs)
+        self._run_epoch_loop(parallel, jobs, pbar, task)
+
+        if self.count_skipped_epochs > 0:
+            logger.info(
+                f"{self.count_skipped_epochs} {plural(self.count_skipped_epochs, 'epoch')} "
+                f"skipped due to duplicate parameters for {pair}."
+            )
+        logger.info(
+            f"{self.num_epochs_saved} {plural(self.num_epochs_saved, 'epoch')} "
+            f"saved to '{self.results_file}' for pair {pair}."
+        )
+
+        if self.current_best_epoch:
+            HyperoptTools.try_export_params(
+                self.config,
+                self.hyperopter.get_strategy_name(),
+                self.current_best_epoch,
+                pair=pair,
+            )
+            HyperoptTools.show_epoch_details(
+                self.current_best_epoch, self.total_epochs, self.print_json
+            )
+        elif self.num_epochs_saved > 0:
+            print(
+                f"No good result found for {pair} in {self.num_epochs_saved} "
+                f"{plural(self.num_epochs_saved, 'epoch')}."
+            )
+
     def start(self) -> None:
-        self.random_state = self._set_random_state(self.config.get("hyperopt_random_state"))
+        self.random_state = self._set_random_state(
+            self.config.get("hyperopt_random_state")
+        )
         logger.info(f"Using optimizer random state: {self.random_state}")
         self.hyperopt_table_header = -1
-        self.hyperopter.prepare_hyperopt()
 
         cpus = cpu_count()
         logger.info(f"Found {cpus} CPU cores. Let's make them scream!")
         config_jobs = self.config.get("hyperopt_jobs", -1)
         logger.info(f"Number of parallel jobs set as: {config_jobs}")
 
+        if self.config.get("hyperopt_per_pair", False):
+            # Capture pairlist before prepare_hyperopt() sets pairlists to None.
+            all_pairs = self.hyperopter.pairlist.copy()
+            original_pairs = self.config.get("pairs")
+            try:
+                with Parallel(n_jobs=config_jobs) as parallel:
+                    jobs = parallel._effective_n_jobs()
+                    logger.info(f"Effective number of parallel workers used: {jobs}")
+
+                    with get_progress_tracker(cust_callables=[self._hyper_out]) as pbar:
+                        for pair in all_pairs:
+                            self._run_hyperopt_for_pair(pair, parallel, jobs, pbar)
+            except KeyboardInterrupt:
+                print("User interrupted..")
+            finally:
+                # Restore original pairs config regardless of outcome.
+                if original_pairs is not None:
+                    self.config["pairs"] = original_pairs
+                elif "pairs" in self.config:
+                    del self.config["pairs"]
+            return
+
+        # ------------------------------------------------------------------ #
+        # Standard (non-per-pair) path — original behavior preserved exactly  #
+        # ------------------------------------------------------------------ #
+        self.hyperopter.prepare_hyperopt()
         self.opt = self.hyperopter.get_optimizer(self.random_state)
+
         try:
             with Parallel(n_jobs=config_jobs) as parallel:
                 jobs = parallel._effective_n_jobs()
@@ -236,56 +392,7 @@ class Hyperopt:
                 # Define progressbar
                 with get_progress_tracker(cust_callables=[self._hyper_out]) as pbar:
                     task = pbar.add_task("Epochs", total=self.total_epochs)
-
-                    start = 0
-
-                    if self.analyze_per_epoch:
-                        # First analysis not in parallel mode when using --analyze-per-epoch.
-                        # This allows dataprovider to load it's informative cache.
-                        asked, is_random = self.get_asked_points(
-                            n_points=1, dimensions=self.hyperopter.o_dimensions
-                        )
-                        f_val0 = self.hyperopter.generate_optimizer(asked[0].params)
-                        self.opt.tell(asked[0], [f_val0["loss"]])
-                        self.evaluate_result(f_val0, 1, is_random[0])
-                        pbar.update(task, advance=1)
-                        start += 1
-
-                    evals = ceil((self.total_epochs - start) / jobs)
-                    for i in range(evals):
-                        # Correct the number of epochs to be processed for the last
-                        # iteration (should not exceed self.total_epochs in total)
-                        n_rest = (i + 1) * jobs - (self.total_epochs - start)
-                        current_jobs = jobs - n_rest if n_rest > 0 else jobs
-
-                        asked, is_random = self.get_asked_points(
-                            n_points=current_jobs, dimensions=self.hyperopter.o_dimensions
-                        )
-
-                        f_val = self.run_optimizer_parallel(
-                            parallel,
-                            [asked1.params for asked1 in asked],
-                        )
-
-                        f_val_loss = [v["loss"] for v in f_val]
-                        for o_ask, v in zip(asked, f_val_loss, strict=False):
-                            self.opt.tell(o_ask, v)
-
-                        for j, val in enumerate(f_val):
-                            # Use human-friendly indexes here (starting from 1)
-                            current = i * jobs + j + 1 + start
-
-                            self.evaluate_result(val, current, is_random[j])
-                            pbar.update(task, advance=1)
-                        self.hyperopter.handle_mp_logging()
-                        gc.collect()
-
-                        if (
-                            self.hyperopter.es_epochs > 0
-                            and self.hyperopter.es_terminator.should_terminate(self.opt)
-                        ):
-                            logger.info(f"Early stopping after {(i + 1) * jobs} epochs")
-                            break
+                    self._run_epoch_loop(parallel, jobs, pbar, task)
 
         except KeyboardInterrupt:
             print("User interrupted..")

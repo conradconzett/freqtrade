@@ -419,6 +419,85 @@ def test_strategy_max_open_trades_infinity_from_strategy(caplog, default_conf):
     assert default_conf["max_open_trades"] == float("inf")
 
 
+def test_load_params_for_pair_no_file(default_conf):
+    """No per-pair file → load_params_for_pair is a strict no-op."""
+    strategy = StrategyResolver.load_strategy(default_conf)
+    original_buy_rsi = strategy.buy_rsi.value
+    original_stoploss = strategy.stoploss
+    original_roi = dict(strategy.minimal_roi)
+
+    strategy.load_params_for_pair("BTC/USDT")
+
+    assert strategy.buy_rsi.value == original_buy_rsi
+    assert strategy.stoploss == original_stoploss
+    assert strategy.minimal_roi == original_roi
+
+
+def test_load_params_for_pair_applies_buy_sell_roi_stoploss(default_conf, mocker):
+    """Per-pair file → buy, sell, roi, and stoploss are all updated."""
+    strategy = StrategyResolver.load_strategy(default_conf)
+
+    per_pair_params = {
+        "strategy_name": CURRENT_TEST_STRATEGY,
+        "params": {
+            "buy": {"buy_rsi": 42},
+            "sell": {"sell_rsi": 88},
+            "roi": {"0": 0.20, "30": 0.10},
+            "stoploss": {"stoploss": -0.08},
+        },
+        "ft_stratparam_v": 1,
+    }
+    mocker.patch("freqtrade.strategy.hyper.Path.is_file", return_value=True)
+    mocker.patch(
+        "freqtrade.strategy.hyper.HyperoptTools.load_params",
+        return_value=per_pair_params,
+    )
+
+    strategy.load_params_for_pair("BTC/USDT")
+
+    assert strategy.buy_rsi.value == 42
+    assert strategy.sell_rsi.value == 88
+    assert strategy.minimal_roi == {"0": 0.20, "30": 0.10}
+    assert strategy.stoploss == pytest.approx(-0.08)
+
+
+def test_load_params_for_pair_fallback_to_global(default_conf, mocker):
+    """When no per-pair file exists the globally loaded params remain in effect."""
+    strategy = StrategyResolver.load_strategy(default_conf)
+    global_buy_rsi = strategy.buy_rsi.value
+    global_stoploss = strategy.stoploss
+
+    mocker.patch("freqtrade.strategy.hyper.Path.is_file", return_value=False)
+
+    strategy.load_params_for_pair("BTC/USDT")
+
+    assert strategy.buy_rsi.value == global_buy_rsi
+    assert strategy.stoploss == global_stoploss
+
+
+def test_load_params_for_pair_does_not_apply_trailing(default_conf, mocker):
+    """trailing_stop must remain global — a per-pair file must not overwrite it."""
+    strategy = StrategyResolver.load_strategy(default_conf)
+    original_trailing = strategy.trailing_stop
+
+    per_pair_params = {
+        "strategy_name": CURRENT_TEST_STRATEGY,
+        "params": {
+            "buy": {"buy_rsi": 42},
+            "trailing": {"trailing_stop": not original_trailing},
+        },
+        "ft_stratparam_v": 1,
+    }
+    mocker.patch("freqtrade.strategy.hyper.Path.is_file", return_value=True)
+    mocker.patch(
+        "freqtrade.strategy.hyper.HyperoptTools.load_params",
+        return_value=per_pair_params,
+    )
+
+    strategy.load_params_for_pair("BTC/USDT")
+
+    assert strategy.trailing_stop == original_trailing
+
 def test_strategy_max_open_trades_infinity_from_config(caplog, default_conf, mocker):
     caplog.set_level(logging.INFO)
     default_conf.update(

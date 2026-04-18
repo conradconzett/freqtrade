@@ -1238,6 +1238,9 @@ class IStrategy(ABC, HyperStrategyMixin):
         The analyzed dataframe is then accessible via `dp.get_analyzed_dataframe()`.
         :param pair: Pair to analyze.
         """
+        # Load per-pair hyperopt parameters (no-op if no per-pair file exists).
+        self.load_params_for_pair(pair)
+
         dataframe = self.dp.ohlcv(
             pair, self.timeframe, candle_type=self.config.get("candle_type_def", CandleType.SPOT)
         )
@@ -1744,6 +1747,8 @@ class IStrategy(ABC, HyperStrategyMixin):
         """
         res = {}
         for pair, pair_data in data.items():
+            # Load per-pair hyperopt parameters (no-op if no per-pair file exists).
+            self.load_params_for_pair(pair)
             validator = StrategyResultValidator(
                 pair_data, warn_only=not self.disable_dataframe_checks
             )
