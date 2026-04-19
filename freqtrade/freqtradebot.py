@@ -1350,8 +1350,6 @@ class FreqtradeBot(LoggingMixin):
             raise DependencyException(f"Attempt to handle closed trade: {trade}")
         self.strategy.load_params_for_pair(trade.pair)
 
-        logger.debug("Handling %s ...", trade)
-
         (enter, exit_) = (False, False)
         exit_tag = None
         exit_signal_type = "exit_short" if trade.is_short else "exit_long"
